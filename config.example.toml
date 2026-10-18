@@ -1,0 +1,22 @@
+# weather_app configuration. Copy to config.toml and edit; every key is optional.
+# Looked up in order: path given as first CLI argument, ./config.toml,
+# ~/.config/weather_app/config.toml.
+
+latitude = 39.7392            # your location (example: downtown Denver)
+longitude = -104.9903
+timezone = "America/Denver"
+# forecast_url = "https://api.open-meteo.com/v1/forecast?..."  # overrides the three keys above
+
+# Pico W sensor endpoints
+local_temp_url = "http://192.168.88.146:5000/temperature"
+local_humidity_url = "http://192.168.88.146:5000/humidity"
+
+refresh_minutes = 15        # full refresh of all sources
+retry_seconds = 60          # retry a failed source this soon
+http_timeout_seconds = 10
+
+fullscreen = true           # false = 800x480 window (handy on a desktop)
+assets_dir = "assets"       # relative to the executable, then the working dir
+font = "Liberation Sans"    # Arial-compatible; installed on Raspberry Pi OS.
+                            # Must be installed, or bold text may fall back to
+                            # monospace. Use "Arial" on macOS, "" for system sans.
