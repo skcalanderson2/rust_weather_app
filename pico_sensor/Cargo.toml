@@ -1,0 +1,31 @@
+[package]
+name = "pico_sensor"
+version = "1.0.0"
+edition = "2024"
+description = "Pico W + BME280 HTTP sensor for weather_app (Rust/Embassy)"
+
+[dependencies]
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread", "executor-interrupt"] }
+embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "unstable-pac"] }
+embassy-time = "0.5"
+embassy-net = { version = "0.9", features = ["tcp", "dhcpv4", "proto-ipv4", "medium-ethernet"] }
+embassy-sync = "0.8"
+embassy-usb = "0.6"
+embassy-usb-logger = "0.6"
+cyw43 = "0.7"
+cyw43-pio = "0.10"
+bme280-rs = { version = "0.4", default-features = false, features = ["async"] }
+embedded-io-async = "0.7"
+static_cell = "2"
+portable-atomic = { version = "1", features = ["critical-section"] }
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
+log = "0.4"
+heapless = "0.9"
+panic-reset = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = 2

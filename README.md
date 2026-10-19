@@ -5,7 +5,8 @@ Raspberry Pi weather display. Rust + [iced](https://iced.rs) 0.14 port of the Xo
 
 - Clock (`H:mm`, 1 s tick), current temp, wind chill, wind speed, condition icon: [Open-Meteo](https://open-meteo.com)
 - Tomorrow's max/min: Open-Meteo daily forecast
-- Local temp + humidity: Pico W sensor (`GET /temperature` → `{"temperature": 54.68}`, `GET /humidity` → `{"humidity": 41.2}`)
+- Local temp + humidity: Pico W sensor (`GET /temperature` → `{"temperature": 54.68}`, `GET /humidity` → `{"humidity": 41.2}`).
+  Rust/Embassy firmware for a Pico W + BME280 is in [pico_sensor/](pico_sensor/README.md).
 - Refresh every 15 min; a failed source retries after 60 s. Esc quits. Cursor hidden.
 
 ## Build & run on the Pi (Raspberry Pi OS Bookworm, 64-bit, Pi 4/5)
