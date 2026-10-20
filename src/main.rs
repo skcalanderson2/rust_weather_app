@@ -17,7 +17,7 @@ use iced::font::Weight;
 use iced::widget::{container, image, mouse_area, pin, stack, text};
 use iced::{
     Background, Border, Color, ContentFit, Element, Font, Length, Radians, Subscription, Task,
-    keyboard, mouse, time, window,
+    Shadow, Vector, keyboard, mouse, time, window,
 };
 
 use config::Config;
@@ -299,6 +299,24 @@ impl App {
         .height(HEIGHT);
 
         if let Some(icon) = &self.icon {
+            // Soft dark halo so the sun/cloud icon stays visible on bright
+            // skies: a blurred translucent disc centred on the icon.
+            let alpha = sky::halo_alpha(self.sky.at((20.0 + 115.0 / 2.0) / HEIGHT));
+            if alpha > 0.0 {
+                // Fainter fill than shadow, so the edge feathers out.
+                let core = Color { a: alpha * 0.6, ..sky::DARK_TEXT };
+                let glow = Color { a: alpha, ..sky::DARK_TEXT };
+                layout = layout.push(
+                    pin(container("").width(100).height(100).style(move |_| container::Style {
+                        background: Some(Background::Color(core)),
+                        border: Border { radius: 50.0.into(), ..Default::default() },
+                        shadow: Shadow { color: glow, offset: Vector::ZERO, blur_radius: 36.0 },
+                        ..Default::default()
+                    }))
+                    .x(653 + 60 - 50)
+                    .y(20 + 57 - 50),
+                );
+            }
             // Xojo `DayNight` canvas: 120x115 at (653, 20).
             layout = layout.push(
                 pin(image(icon.clone()).width(120).height(115).content_fit(ContentFit::Contain))

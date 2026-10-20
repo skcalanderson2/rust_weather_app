@@ -178,6 +178,14 @@ pub fn text_on(background: Color, light: Color) -> Color {
     }
 }
 
+/// Opacity of the dark halo behind the weather icon. The icons (a yellow
+/// sun, white clouds) vanish on bright skies, so the halo fades in as the
+/// sky behind them brightens: none on dark skies (night keeps its original
+/// look), up to 40 % on the brightest.
+pub fn halo_alpha(background: Color) -> f32 {
+    ((luminance(background) - 0.2) / 0.4).clamp(0.0, 1.0) * 0.4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +207,15 @@ mod tests {
         assert_eq!(Phase::at(t(18, 13), sr, ss), Phase::Dusk(0.5));
         assert_eq!(Phase::at(t(18, 44), sr, ss), Phase::Night);
         assert_eq!(Phase::at(t(23, 0), sr, ss), Phase::Night);
+    }
+
+    #[test]
+    fn halo_only_on_bright_skies() {
+        let icon_y = 77.5 / 480.0;
+        assert_eq!(halo_alpha(NIGHT.at(icon_y)), 0.0);
+        assert_eq!(halo_alpha(DAWN_DUSK_PARTLY.at(icon_y)), 0.0);
+        assert!(halo_alpha(DAY_CLEAR.at(icon_y)) > 0.3);
+        assert!(halo_alpha(DAY_CLOUDY.at(icon_y)) > 0.1);
     }
 
     #[test]
