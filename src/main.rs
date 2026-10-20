@@ -14,7 +14,7 @@ use chrono::{Local, NaiveTime};
 use iced::gradient::Linear;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::Weight;
-use iced::widget::{container, image, mouse_area, pin, stack, text};
+use iced::widget::{container, image, mouse_area, pin, stack, svg, text};
 use iced::{
     Background, Border, Color, ContentFit, Element, Font, Length, Radians, Subscription, Task,
     Shadow, Vector, keyboard, mouse, time, window,
@@ -73,6 +73,7 @@ struct App {
     client: reqwest::Client,
     font: Font,
     assets: PathBuf,
+    wind_icon: svg::Handle,
     /// Background currently shown; eases toward `sky_target()` every tick.
     sky: Sky,
     /// Testing aid: `WEATHER_APP_SKY=dawn-partly` (night, dawn-*, day-*,
@@ -101,6 +102,7 @@ impl App {
         let app = Self {
             client: weather::client(config.http_timeout_seconds),
             font,
+            wind_icon: svg::Handle::from_path(assets.join("icons/wind.svg")),
             sky: sky::NIGHT,
             sky_override: std::env::var("WEATHER_APP_SKY").ok().and_then(|s| parse_sky(&s)),
             assets,
@@ -299,23 +301,8 @@ impl App {
         .height(HEIGHT);
 
         if let Some(icon) = &self.icon {
-            // Soft dark halo so the sun/cloud icon stays visible on bright
-            // skies: a blurred translucent disc centred on the icon.
-            let alpha = sky::halo_alpha(self.sky.at((20.0 + 115.0 / 2.0) / HEIGHT));
-            if alpha > 0.0 {
-                // Fainter fill than shadow, so the edge feathers out.
-                let core = Color { a: alpha * 0.6, ..sky::DARK_TEXT };
-                let glow = Color { a: alpha, ..sky::DARK_TEXT };
-                layout = layout.push(
-                    pin(container("").width(100).height(100).style(move |_| container::Style {
-                        background: Some(Background::Color(core)),
-                        border: Border { radius: 50.0.into(), ..Default::default() },
-                        shadow: Shadow { color: glow, offset: Vector::ZERO, blur_radius: 36.0 },
-                        ..Default::default()
-                    }))
-                    .x(653 + 60 - 50)
-                    .y(20 + 57 - 50),
-                );
+            if let Some(halo) = self.halo(713.0, 77.5, 100.0) {
+                layout = layout.push(halo);
             }
             // Xojo `DayNight` canvas: 120x115 at (653, 20).
             layout = layout.push(
@@ -324,6 +311,21 @@ impl App {
                     .y(20),
             );
         }
+
+        // Wind icon beside the speed. Xojo `DayNight1` canvas, 55x56 at
+        // (718, 139); its image reference was broken in the Xojo project,
+        // so it never showed there either. Monochrome SVG tinted with the
+        // same readable colour as the "Mph" text next to it.
+        let wind_ink = self.ink(GREY, 139.0, 56.0);
+        layout = layout.push(
+            pin(svg(self.wind_icon.clone())
+                .width(55)
+                .height(56)
+                .content_fit(ContentFit::Contain)
+                .style(move |_, _| svg::Style { color: Some(wind_ink) }))
+            .x(718)
+            .y(139),
+        );
 
         let Sky { top, bottom } = self.sky;
         let screen = container(layout).center(Length::Fill).style(move |_| container::Style {
@@ -339,6 +341,31 @@ impl App {
 
         // Kiosk display: hide the pointer everywhere (Xojo InvisibleCursor).
         mouse_area(screen).interaction(mouse::Interaction::Hidden).into()
+    }
+
+    /// Soft dark halo centred at (cx, cy) so a light icon stays visible on
+    /// bright skies: a blurred translucent disc whose strength follows the
+    /// sky's brightness there. `None` on dark skies.
+    fn halo<'a>(&self, cx: f32, cy: f32, diameter: f32) -> Option<Element<'a, Message>> {
+        let alpha = sky::halo_alpha(self.sky.at(cy / HEIGHT));
+        if alpha <= 0.0 {
+            return None;
+        }
+        // Fainter fill than shadow, so the edge feathers out.
+        let core = Color { a: alpha * 0.6, ..sky::DARK_TEXT };
+        let glow = Color { a: alpha, ..sky::DARK_TEXT };
+        let r = diameter / 2.0;
+        Some(
+            pin(container("").width(diameter).height(diameter).style(move |_| container::Style {
+                background: Some(Background::Color(core)),
+                border: Border { radius: r.into(), ..Default::default() },
+                shadow: Shadow { color: glow, offset: Vector::ZERO, blur_radius: diameter * 0.36 },
+                ..Default::default()
+            }))
+            .x(cx - r)
+            .y(cy - r)
+            .into(),
+        )
     }
 
     /// A Xojo `DesktopLabel`: fixed box at (x, y, w, h), text vertically
