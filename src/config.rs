@@ -96,7 +96,7 @@ impl Config {
         format!(
             "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}\
              &current=temperature_2m,apparent_temperature,is_day,weather_code,cloud_cover,wind_speed_10m\
-             &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max\
+             &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset\
              &temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch\
              &timezone={}&forecast_days=3",
             self.latitude,
@@ -138,8 +138,8 @@ mod tests {
 
     #[test]
     fn default_url_matches_xojo_format() {
-        // Same URL shape as the Xojo App.API_URL constant.
-        let xojo = "https://api.open-meteo.com/v1/forecast?latitude=39.7392&longitude=-104.9903&current=temperature_2m,apparent_temperature,is_day,weather_code,cloud_cover,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FDenver&forecast_days=3";
+        // Xojo App.API_URL shape, plus sunrise,sunset for the sky background.
+        let xojo = "https://api.open-meteo.com/v1/forecast?latitude=39.7392&longitude=-104.9903&current=temperature_2m,apparent_temperature,is_day,weather_code,cloud_cover,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FDenver&forecast_days=3";
         assert_eq!(Config::default().forecast_url(), xojo);
     }
 

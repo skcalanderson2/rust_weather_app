@@ -25,7 +25,10 @@ if [[ -f config.toml ]]; then
 else
     cp config.example.toml dist/weather_app/config.toml
 fi
-tar -C dist -czf dist/weather_app-pi.tar.gz weather_app
+# COPYFILE_DISABLE: no macOS ._* metadata files in the archive.
+# Write then rename, so the Pi's updater never sees a half-written tarball.
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C dist -czf dist/.weather_app-pi.tar.gz.tmp weather_app
+mv -f dist/.weather_app-pi.tar.gz.tmp dist/weather_app-pi.tar.gz
 echo "Built dist/weather_app-pi.tar.gz"
 
 if [[ -n "${PI_HOST:-}" ]]; then

@@ -4,21 +4,24 @@
 //! controls (800x480 window) so the screen matches the original.
 
 mod config;
+mod sky;
 mod weather;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{Local, NaiveTime};
+use iced::gradient::Linear;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::Weight;
 use iced::widget::{container, image, mouse_area, pin, stack, text};
 use iced::{
-    Border, Color, ContentFit, Element, Font, Length, Subscription, Task, keyboard, mouse, time,
-    window,
+    Background, Border, Color, ContentFit, Element, Font, Length, Radians, Subscription, Task,
+    keyboard, mouse, time, window,
 };
 
 use config::Config;
+use sky::{Cover, Phase, Sky};
 use weather::{DayForecast, Forecast, fmt_2dp, fmt_plain};
 
 const WIDTH: f32 = 800.0;
@@ -26,6 +29,9 @@ const HEIGHT: f32 = 480.0;
 /// Xojo `&cCCCCCC` (large labels) and `&cF7F7F7` (small labels).
 const GREY: Color = Color::from_rgb8(0xCC, 0xCC, 0xCC);
 const WHITE: Color = Color::from_rgb8(0xF7, 0xF7, 0xF7);
+/// Fraction of the remaining distance the background moves toward its
+/// target each second: cloud changes fade in over roughly half a minute.
+const SKY_FADE_PER_SEC: f32 = 0.1;
 
 fn main() -> iced::Result {
     let config = Config::load();
@@ -67,7 +73,11 @@ struct App {
     client: reqwest::Client,
     font: Font,
     assets: PathBuf,
-    background: image::Handle,
+    /// Background currently shown; eases toward `sky_target()` every tick.
+    sky: Sky,
+    /// Testing aid: `WEATHER_APP_SKY=dawn-partly` (night, dawn-*, day-*,
+    /// dusk-* with clear/partly/cloudy) pins the sky to one state.
+    sky_override: Option<Sky>,
 
     clock: String,
     forecast: Option<Forecast>,
@@ -91,7 +101,8 @@ impl App {
         let app = Self {
             client: weather::client(config.http_timeout_seconds),
             font,
-            background: image::Handle::from_path(assets.join("background.png")),
+            sky: sky::NIGHT,
+            sky_override: std::env::var("WEATHER_APP_SKY").ok().and_then(|s| parse_sky(&s)),
             assets,
             config,
             clock: clock_text(),
@@ -109,6 +120,8 @@ impl App {
         match message {
             Message::Tick => {
                 self.clock = clock_text();
+                let target = self.sky_target();
+                self.sky.approach(&target, SKY_FADE_PER_SEC);
                 Task::none()
             }
             Message::RefreshAll => Task::batch(
@@ -122,8 +135,13 @@ impl App {
                 self.icon = Some(image::Handle::from_path(
                     self.assets.join("icons").join(format!("{icon}.png")),
                 ));
+                let first = self.forecast.is_none();
                 self.forecast = Some(forecast);
                 self.forecast_error = None;
+                if first {
+                    // No fade from the placeholder night sky at startup.
+                    self.sky = self.sky_target();
+                }
                 Task::none()
             }
             Message::ForecastLoaded(Err(e)) => {
@@ -150,6 +168,27 @@ impl App {
             }
             Message::Exit => iced::exit(),
         }
+    }
+
+    /// Sky for right now: phase from today's sunrise/sunset, cover from
+    /// current cloud cover and weather code. Night until the first forecast.
+    fn sky_target(&self) -> Sky {
+        if let Some(sky) = self.sky_override {
+            return sky;
+        }
+        let Some(f) = &self.forecast else { return sky::NIGHT };
+        let now = Local::now().naive_local();
+        let Some((sunrise, sunset)) = f.daily.sun_times(now.date()) else {
+            return sky::NIGHT;
+        };
+        let cover = Cover::from(f.current.cloud_cover, f.current.weather_code);
+        sky::target(Phase::at(now, sunrise, sunset), cover)
+    }
+
+    /// Readable text colour for a label whose box is (y, h), given its
+    /// normal light colour.
+    fn ink(&self, light: Color, y: f32, h: f32) -> Color {
+        sky::text_on(self.sky.at((y + h / 2.0) / HEIGHT), light)
     }
 
     fn fetch(&self, source: Source) -> Task<Message> {
@@ -206,6 +245,7 @@ impl App {
 
         let regular = self.font;
         let bold = Font { weight: Weight::Bold, ..self.font };
+        let box_ink = self.ink(GREY, 321.0, 139.0);
 
         let mut layout = stack![
             // Clock, current conditions (top left)
@@ -220,8 +260,8 @@ impl App {
                 24.0, regular, GREY, (496.0, 132.0, 217.0, 83.0), Horizontal::Right,
             ),
             // Tomorrow's forecast box (Xojo GroupBox1 + ForecastDay1/Max/Min)
-            pin(container("").width(144).height(139).style(|_| container::Style {
-                border: Border { color: GREY, width: 1.0, radius: 0.0.into() },
+            pin(container("").width(144).height(139).style(move |_| container::Style {
+                border: Border { color: box_ink, width: 1.0, radius: 0.0.into() },
                 ..Default::default()
             }))
             .x(20)
@@ -267,13 +307,17 @@ impl App {
             );
         }
 
-        let screen = stack![
-            image(self.background.clone())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(ContentFit::Cover),
-            container(layout).center(Length::Fill),
-        ];
+        let Sky { top, bottom } = self.sky;
+        let screen = container(layout).center(Length::Fill).style(move |_| container::Style {
+            // Radians(PI) runs the gradient from the top edge to the bottom.
+            background: Some(Background::Gradient(
+                Linear::new(Radians(std::f32::consts::PI))
+                    .add_stop(0.0, top)
+                    .add_stop(1.0, bottom)
+                    .into(),
+            )),
+            ..Default::default()
+        });
 
         // Kiosk display: hide the pointer everywhere (Xojo InvisibleCursor).
         mouse_area(screen).interaction(mouse::Interaction::Hidden).into()
@@ -295,7 +339,7 @@ impl App {
                 text(content.to_owned())
                     .size(size)
                     .font(font)
-                    .color(color)
+                    .color(self.ink(color, y, h))
                     .wrapping(text::Wrapping::None),
             )
             .width(w)
@@ -307,6 +351,25 @@ impl App {
         .y(y)
         .into()
     }
+}
+
+/// `WEATHER_APP_SKY` value -> fixed sky (twilight shown at its peak).
+fn parse_sky(s: &str) -> Option<Sky> {
+    let (phase, cover) = s.split_once('-').unwrap_or((s, "clear"));
+    let cover = match cover {
+        "clear" => Cover::Clear,
+        "partly" => Cover::Partly,
+        "cloudy" => Cover::Cloudy,
+        _ => return None,
+    };
+    let phase = match phase {
+        "night" => Phase::Night,
+        "dawn" => Phase::Dawn(0.5),
+        "day" => Phase::Day,
+        "dusk" => Phase::Dusk(0.5),
+        _ => return None,
+    };
+    Some(sky::target(phase, cover))
 }
 
 /// Xojo `d.ToString("H:mm")`.

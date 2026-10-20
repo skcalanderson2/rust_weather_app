@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use chrono::NaiveDate;
-use serde::Deserialize;
+use chrono::{NaiveDate, NaiveDateTime};
+use serde::{Deserialize, Deserializer};
 
 // ---------- Open-Meteo ----------
 
@@ -19,6 +19,7 @@ pub struct Current {
     pub apparent_temperature: f64,
     pub is_day: u8,
     pub weather_code: u8,
+    pub cloud_cover: f64,
     pub wind_speed_10m: f64,
 }
 
@@ -27,6 +28,21 @@ pub struct Daily {
     pub time: Vec<NaiveDate>,
     pub temperature_2m_max: Vec<Option<f64>>,
     pub temperature_2m_min: Vec<Option<f64>>,
+    /// Local times at the configured timezone, e.g. "2026-10-20T07:15".
+    #[serde(default, deserialize_with = "local_times")]
+    pub sunrise: Vec<Option<NaiveDateTime>>,
+    #[serde(default, deserialize_with = "local_times")]
+    pub sunset: Vec<Option<NaiveDateTime>>,
+}
+
+/// Open-Meteo sends ISO local times without seconds ("2026-10-20T07:15"),
+/// which chrono's default `NaiveDateTime` deserializer rejects.
+fn local_times<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Option<NaiveDateTime>>, D::Error> {
+    let raw: Vec<Option<String>> = Deserialize::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .map(|s| s.and_then(|s| NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M").ok()))
+        .collect())
 }
 
 /// One forecast day, as shown in the box at the bottom left.
@@ -45,6 +61,12 @@ impl Daily {
             max: self.temperature_2m_max.get(index).copied().flatten(),
             min: self.temperature_2m_min.get(index).copied().flatten(),
         })
+    }
+
+    /// Sunrise and sunset for `date` (normally today).
+    pub fn sun_times(&self, date: NaiveDate) -> Option<(NaiveDateTime, NaiveDateTime)> {
+        let i = self.time.iter().position(|d| *d == date)?;
+        Some((self.sunrise.get(i).copied().flatten()?, self.sunset.get(i).copied().flatten()?))
     }
 }
 
@@ -161,7 +183,7 @@ pub fn fmt_2dp(v: f64) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"{"latitude":39.73915,"longitude":-104.984703,"generationtime_ms":0.9,"utc_offset_seconds":-21600,"timezone":"America/Denver","timezone_abbreviation":"GMT-6","elevation":892.0,"current_units":{},"current":{"time":"2026-10-16T12:00","interval":900,"temperature_2m":51.7,"apparent_temperature":48.7,"is_day":1,"weather_code":1,"cloud_cover":31,"wind_speed_10m":1.9},"daily_units":{},"daily":{"time":["2026-10-16","2026-10-17","2026-10-18"],"weather_code":[3,3,3],"temperature_2m_max":[64.7,69.1,54.8],"temperature_2m_min":[36.2,45.7,42.0],"precipitation_probability_max":[0,4,1]}}"#;
+    const SAMPLE: &str = r#"{"latitude":39.73915,"longitude":-104.984703,"generationtime_ms":0.9,"utc_offset_seconds":-21600,"timezone":"America/Denver","timezone_abbreviation":"GMT-6","elevation":892.0,"current_units":{},"current":{"time":"2026-10-16T12:00","interval":900,"temperature_2m":51.7,"apparent_temperature":48.7,"is_day":1,"weather_code":1,"cloud_cover":31,"wind_speed_10m":1.9},"daily_units":{},"daily":{"time":["2026-10-16","2026-10-17","2026-10-18"],"weather_code":[3,3,3],"temperature_2m_max":[64.7,69.1,54.8],"temperature_2m_min":[36.2,45.7,42.0],"precipitation_probability_max":[0,4,1],"sunrise":["2026-10-16T07:42","2026-10-17T07:43","2026-10-18T07:45"],"sunset":["2026-10-16T18:33","2026-10-17T18:31","2026-10-18T18:29"]}}"#;
 
     #[test]
     fn parses_open_meteo_response() {
@@ -173,6 +195,10 @@ mod tests {
         assert_eq!(tomorrow.max, Some(69.1));
         assert_eq!(tomorrow.min, Some(45.7));
         assert!(f.daily.day(5).is_none());
+        assert_eq!(f.current.cloud_cover, 31.0);
+        let (sr, ss) = f.daily.sun_times(NaiveDate::from_ymd_opt(2026, 10, 17).unwrap()).unwrap();
+        assert_eq!(sr.format("%H:%M").to_string(), "07:43");
+        assert_eq!(ss.format("%H:%M").to_string(), "18:31");
     }
 
     #[test]

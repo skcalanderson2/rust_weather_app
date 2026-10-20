@@ -1,0 +1,16 @@
+[Unit]
+Description=Install new weather_app builds from the NAS and restart the app
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/weather-app-updater.sh
+Environment=TARBALL=/mnt/nas/sysala/sysala/rust_ai/rust_weather_app/dist/weather_app-pi.tar.gz
+Environment=INSTALL_DIR=%h/weather_app
+Environment=POLL_SECONDS=30
+# 1 = also replace config.toml from the tarball; 0 keeps the Pi's own copy.
+Environment=UPDATE_CONFIG=0
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
