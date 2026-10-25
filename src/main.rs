@@ -14,7 +14,7 @@ use chrono::{Local, NaiveTime};
 use iced::gradient::Linear;
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::Weight;
-use iced::widget::{container, image, mouse_area, pin, stack, svg, text};
+use iced::widget::{container, image, mouse_area, pin, row, stack, svg, text};
 use iced::{
     Background, Border, Color, ContentFit, Element, Font, Length, Radians, Subscription, Task,
     Shadow, Vector, keyboard, mouse, time, window,
@@ -81,6 +81,8 @@ struct App {
     sky_override: Option<Sky>,
 
     clock: String,
+    /// "Sun Oct 25", shown right of the clock.
+    date: String,
     forecast: Option<Forecast>,
     forecast_error: Option<String>,
     icon: Option<image::Handle>,
@@ -108,6 +110,7 @@ impl App {
             assets,
             config,
             clock: clock_text(),
+            date: date_text(Local::now().date_naive()),
             forecast: None,
             forecast_error: None,
             icon: None,
@@ -122,6 +125,7 @@ impl App {
         match message {
             Message::Tick => {
                 self.clock = clock_text();
+                self.date = date_text(Local::now().date_naive());
                 let target = self.sky_target();
                 self.sky.approach(&target, SKY_FADE_PER_SEC);
                 Task::none()
@@ -251,7 +255,7 @@ impl App {
 
         let mut layout = stack![
             // Clock, current conditions (top left)
-            self.label(&self.clock, 80.0, regular, GREY, (20.0, 20.0, 348.0, 115.0), Horizontal::Left),
+            self.clock_and_date(regular),
             self.label(&current_temp, 48.0, regular, GREY, (20.0, 112.0, 573.0, 83.0), Horizontal::Left),
             self.label(
                 &format!("Windchill Temp: {wind_chill}° F"),
@@ -368,6 +372,25 @@ impl App {
         )
     }
 
+    /// Clock (Xojo `currentTime`: 80 px in a 348x115 box at 20,20) with the
+    /// date right after it at 56 px. Bottom-aligned so the two sit on
+    /// roughly the same baseline; the row grows right as the time widens.
+    fn clock_and_date<'a>(&self, font: Font) -> Element<'a, Message> {
+        let ink = self.ink(GREY, 20.0, 115.0);
+        let clock = text(self.clock.clone()).size(80).font(font).color(ink);
+        // Nudge up so the smaller text's baseline meets the clock's.
+        let date = container(text(self.date.clone()).size(56).font(font).color(ink))
+            .padding(iced::Padding { bottom: 6.0, ..Default::default() });
+        pin(
+            container(row![clock, date].spacing(24).align_y(Vertical::Bottom))
+                .height(115)
+                .align_y(Vertical::Center),
+        )
+        .x(20)
+        .y(20)
+        .into()
+    }
+
     /// A Xojo `DesktopLabel`: fixed box at (x, y, w, h), text vertically
     /// centred, single line.
     fn label<'a>(
@@ -420,4 +443,21 @@ fn parse_sky(s: &str) -> Option<Sky> {
 /// Xojo `d.ToString("H:mm")`.
 fn clock_text() -> String {
     Local::now().format("%-H:%M").to_string()
+}
+
+/// Short weekday and date, e.g. "Sun Oct 25".
+fn date_text(date: chrono::NaiveDate) -> String {
+    date.format("%a %b %-d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_is_short_weekday_month_day() {
+        let d = |y, m, d| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        assert_eq!(date_text(d(2026, 10, 25)), "Sun Oct 25");
+        assert_eq!(date_text(d(2026, 11, 3)), "Tue Nov 3");
+    }
 }
