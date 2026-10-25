@@ -11,6 +11,9 @@ use serde::{Deserialize, Deserializer};
 pub struct Forecast {
     pub current: Current,
     pub daily: Daily,
+    /// Absent when a custom `forecast_url` doesn't request hourly data.
+    #[serde(default)]
+    pub hourly: Hourly,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -26,13 +29,56 @@ pub struct Current {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Daily {
     pub time: Vec<NaiveDate>,
+    #[serde(default)]
+    pub weather_code: Vec<Option<u8>>,
     pub temperature_2m_max: Vec<Option<f64>>,
     pub temperature_2m_min: Vec<Option<f64>>,
+    #[serde(default)]
+    pub precipitation_probability_max: Vec<Option<f64>>,
+    #[serde(default)]
+    pub wind_gusts_10m_max: Vec<Option<f64>>,
     /// Local times at the configured timezone, e.g. "2026-10-20T07:15".
     #[serde(default, deserialize_with = "local_times")]
     pub sunrise: Vec<Option<NaiveDateTime>>,
     #[serde(default, deserialize_with = "local_times")]
     pub sunset: Vec<Option<NaiveDateTime>>,
+}
+
+/// Hour-by-hour forecast (3 days = 72 entries).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Hourly {
+    #[serde(default, deserialize_with = "local_times")]
+    pub time: Vec<Option<NaiveDateTime>>,
+    #[serde(default)]
+    pub temperature_2m: Vec<Option<f64>>,
+    #[serde(default)]
+    pub precipitation_probability: Vec<Option<f64>>,
+}
+
+/// One hour of the forecast.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hour {
+    pub time: NaiveDateTime,
+    pub temperature: f64,
+    pub precipitation: Option<f64>,
+}
+
+impl Hourly {
+    /// The `count` hours starting with the one containing `now`.
+    pub fn next(&self, now: NaiveDateTime, count: usize) -> Vec<Hour> {
+        let start = now - chrono::TimeDelta::hours(1);
+        (0..self.time.len())
+            .filter_map(|i| {
+                Some(Hour {
+                    time: self.time[i]?,
+                    temperature: self.temperature_2m.get(i).copied().flatten()?,
+                    precipitation: self.precipitation_probability.get(i).copied().flatten(),
+                })
+            })
+            .filter(|h| h.time > start)
+            .take(count)
+            .collect()
+    }
 }
 
 /// Open-Meteo sends ISO local times without seconds ("2026-10-20T07:15"),
@@ -45,22 +91,34 @@ fn local_times<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Option<NaiveDateTi
         .collect())
 }
 
-/// One forecast day, as shown in the box at the bottom left.
+/// One forecast day (the box at the bottom left, and the details page).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DayForecast {
     pub date: NaiveDate,
+    pub code: Option<u8>,
     pub max: Option<f64>,
     pub min: Option<f64>,
+    pub precipitation: Option<f64>,
+    pub gusts: Option<f64>,
 }
 
 impl Daily {
-    /// Xojo `UpdateForecast` displays index 1 (tomorrow).
     pub fn day(&self, index: usize) -> Option<DayForecast> {
         Some(DayForecast {
             date: *self.time.get(index)?,
+            code: self.weather_code.get(index).copied().flatten(),
             max: self.temperature_2m_max.get(index).copied().flatten(),
             min: self.temperature_2m_min.get(index).copied().flatten(),
+            precipitation: self.precipitation_probability_max.get(index).copied().flatten(),
+            gusts: self.wind_gusts_10m_max.get(index).copied().flatten(),
         })
+    }
+
+    /// The forecast for a calendar date. Looking up by date (not index)
+    /// keeps "tomorrow" right between midnight and the next refresh, when
+    /// index 1 of the last fetch is already today.
+    pub fn on(&self, date: NaiveDate) -> Option<DayForecast> {
+        self.day(self.time.iter().position(|d| *d == date)?)
     }
 
     /// Sunrise and sunset for `date` (normally today).
@@ -171,11 +229,10 @@ pub fn fmt_plain(v: f64) -> String {
     format!("{v}")
 }
 
-/// Xojo `Format(v, "-#.##")`: at most two decimals, no trailing zeros.
-/// (Fixes Xojo's "70." / ".5" output for whole numbers and |v| < 1.)
-pub fn fmt_2dp(v: f64) -> String {
-    let s = format!("{v:.2}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
+/// One decimal, trailing ".0" dropped (50.72 -> "50.7", 51.0 -> "51").
+pub fn fmt_1dp(v: f64) -> String {
+    let s = format!("{v:.1}");
+    let s = s.strip_suffix(".0").unwrap_or(&s);
     if s == "-0" { "0".into() } else { s.into() }
 }
 
@@ -183,7 +240,7 @@ pub fn fmt_2dp(v: f64) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"{"latitude":39.73915,"longitude":-104.984703,"generationtime_ms":0.9,"utc_offset_seconds":-21600,"timezone":"America/Denver","timezone_abbreviation":"GMT-6","elevation":892.0,"current_units":{},"current":{"time":"2026-10-16T12:00","interval":900,"temperature_2m":51.7,"apparent_temperature":48.7,"is_day":1,"weather_code":1,"cloud_cover":31,"wind_speed_10m":1.9},"daily_units":{},"daily":{"time":["2026-10-16","2026-10-17","2026-10-18"],"weather_code":[3,3,3],"temperature_2m_max":[64.7,69.1,54.8],"temperature_2m_min":[36.2,45.7,42.0],"precipitation_probability_max":[0,4,1],"sunrise":["2026-10-16T07:42","2026-10-17T07:43","2026-10-18T07:45"],"sunset":["2026-10-16T18:33","2026-10-17T18:31","2026-10-18T18:29"]}}"#;
+    const SAMPLE: &str = r#"{"latitude":39.73915,"longitude":-104.984703,"generationtime_ms":0.9,"utc_offset_seconds":-21600,"timezone":"America/Denver","timezone_abbreviation":"GMT-6","elevation":892.0,"current_units":{},"current":{"time":"2026-10-16T12:00","interval":900,"temperature_2m":51.7,"apparent_temperature":48.7,"is_day":1,"weather_code":1,"cloud_cover":31,"wind_speed_10m":1.9},"daily_units":{},"daily":{"time":["2026-10-16","2026-10-17","2026-10-18"],"weather_code":[3,3,3],"temperature_2m_max":[64.7,69.1,54.8],"temperature_2m_min":[36.2,45.7,42.0],"precipitation_probability_max":[0,4,1],"sunrise":["2026-10-16T07:42","2026-10-17T07:43","2026-10-18T07:45"],"sunset":["2026-10-16T18:33","2026-10-17T18:31","2026-10-18T18:29"]},"hourly":{"time":["2026-10-16T12:00","2026-10-16T13:00","2026-10-16T14:00","2026-10-16T15:00"],"temperature_2m":[51.7,52.0,52.4,null],"precipitation_probability":[0,5,10,15]}}"#;
 
     #[test]
     fn parses_open_meteo_response() {
@@ -210,15 +267,40 @@ mod tests {
     }
 
     #[test]
+    fn one_decimal_formatting() {
+        assert_eq!(fmt_1dp(50.72), "50.7");
+        assert_eq!(fmt_1dp(51.0), "51");
+        assert_eq!(fmt_1dp(68.75), "68.8");
+        assert_eq!(fmt_1dp(-0.04), "0");
+    }
+
+    #[test]
+    fn tomorrow_by_date_survives_midnight() {
+        let f: Forecast = serde_json::from_str(SAMPLE).unwrap();
+        let d = |m, day| NaiveDate::from_ymd_opt(2026, m, day).unwrap();
+        // Fetched on the 16th; after midnight "tomorrow" is the 18th, not index 1.
+        assert_eq!(f.daily.on(d(10, 18)).unwrap().max, Some(54.8));
+        assert_eq!(f.daily.on(d(10, 17)).unwrap().code, Some(3));
+        assert_eq!(f.daily.on(d(10, 17)).unwrap().precipitation, Some(4.0));
+        assert!(f.daily.on(d(10, 19)).is_none());
+    }
+
+    #[test]
+    fn hourly_next_starts_at_current_hour() {
+        let f: Forecast = serde_json::from_str(SAMPLE).unwrap();
+        let now = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap().and_hms_opt(13, 20, 0).unwrap();
+        let hours = f.hourly.next(now, 2);
+        assert_eq!(hours.len(), 2);
+        assert_eq!(hours[0].time.format("%H:%M").to_string(), "13:00");
+        assert_eq!(hours[0].temperature, 52.0);
+        assert_eq!(hours[1].precipitation, Some(10.0));
+    }
+
+    #[test]
     fn formatting_matches_xojo() {
         assert_eq!(fmt_plain(51.1), "51.1");
         assert_eq!(fmt_plain(54.68), "54.68");
         assert_eq!(fmt_plain(51.0), "51");
-        assert_eq!(fmt_2dp(69.1), "69.1");
-        assert_eq!(fmt_2dp(45.678), "45.68");
-        assert_eq!(fmt_2dp(70.0), "70");
-        assert_eq!(fmt_2dp(-3.5), "-3.5");
-        assert_eq!(fmt_2dp(-0.001), "0");
     }
 
     #[test]
@@ -233,6 +315,8 @@ mod tests {
             for day in [true, false] {
                 let name = icon_name(code, day);
                 assert!(dir.join(format!("{name}.png")).is_file(), "missing {name}.png");
+                assert!(dir.join(format!("outlined/{name}.png")).is_file(), "missing outlined/{name}.png");
+                assert!(dir.join(format!("outlined-fine/{name}.png")).is_file(), "missing outlined-fine/{name}.png");
             }
         }
     }

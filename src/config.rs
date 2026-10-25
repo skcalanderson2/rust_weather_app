@@ -29,10 +29,17 @@ pub struct Config {
     pub http_timeout_seconds: u64,
     /// Start fullscreen (kiosk mode on the Pi's 800x480 display).
     pub fullscreen: bool,
-    /// Directory containing `background.png` and `icons/`.
+    /// Directory containing `icons/`.
     /// Relative paths resolve against the executable's directory first,
     /// then the current working directory.
     pub assets_dir: PathBuf,
+    /// Dim the screen backlight at night (Pi touch display only).
+    pub dim_at_night: bool,
+    /// Backlight levels in percent. Twilight ramps between them.
+    pub day_brightness: f32,
+    pub night_brightness: f32,
+    /// Show US National Weather Service alerts (api.weather.gov) as a banner.
+    pub alerts: bool,
     /// Font family for all text. The Xojo app used Arial; "Liberation Sans"
     /// is metric-compatible and ships with Raspberry Pi OS.
     pub font: String,
@@ -53,6 +60,10 @@ impl Default for Config {
             fullscreen: true,
             assets_dir: PathBuf::from("assets"),
             font: "Liberation Sans".into(),
+            dim_at_night: true,
+            day_brightness: 100.0,
+            night_brightness: 30.0,
+            alerts: true,
         }
     }
 }
@@ -96,7 +107,7 @@ impl Config {
         format!(
             "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}\
              &current=temperature_2m,apparent_temperature,is_day,weather_code,cloud_cover,wind_speed_10m\
-             &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset\
+             &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,wind_gusts_10m_max&hourly=temperature_2m,precipitation_probability\
              &temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch\
              &timezone={}&forecast_days=3",
             self.latitude,
@@ -139,7 +150,7 @@ mod tests {
     #[test]
     fn default_url_matches_xojo_format() {
         // Xojo App.API_URL shape, plus sunrise,sunset for the sky background.
-        let xojo = "https://api.open-meteo.com/v1/forecast?latitude=39.7392&longitude=-104.9903&current=temperature_2m,apparent_temperature,is_day,weather_code,cloud_cover,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FDenver&forecast_days=3";
+        let xojo = "https://api.open-meteo.com/v1/forecast?latitude=39.7392&longitude=-104.9903&current=temperature_2m,apparent_temperature,is_day,weather_code,cloud_cover,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,wind_gusts_10m_max&hourly=temperature_2m,precipitation_probability&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FDenver&forecast_days=3";
         assert_eq!(Config::default().forecast_url(), xojo);
     }
 

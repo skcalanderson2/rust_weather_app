@@ -13,8 +13,22 @@ Raspberry Pi weather display. Rust + [iced](https://iced.rs) 0.14 port of the Xo
   any fog/rain/snow). Colours blend smoothly; each label switches between light and dark text
   to stay readable. Preview a state with e.g. `WEATHER_APP_SKY=dusk-partly ./weather_app`
   (`night`, `dawn-*`, `day-*`, `dusk-*` with `clear`/`partly`/`cloudy`).
+- Weather icons switch day/night exactly at sunrise/sunset; light icons get a soft halo on bright
+  skies. Sunrise and sunset times are shown under the wind speed.
+- Forecast box: tomorrow's high/low, weather icon and chance of precipitation.
+- Values older than 30 minutes (forecast or sensor) are drawn faded, so an outage is visible.
+- US National Weather Service alerts for your location appear as a banner (red = warning,
+  orange = watch, amber = advisory). Disable with `alerts = false`.
+- Tap the screen for a details page: 3-day forecast (high/low, precipitation, gusts), the alert
+  headline, and a next-24-hours temperature and precipitation chart. Tap again (or wait a minute)
+  to return.
+- Night dimming: the Pi touch display's backlight follows the sky (`day_brightness`,
+  `night_brightness`, `dim_at_night` in `config.toml`); full brightness while the details page
+  is open.
+- Previews: `WEATHER_APP_DETAILS=1` opens the details page, `WEATHER_APP_ALERT="Winter Storm
+  Warning"` shows a test banner.
 
-## Build & run on the Pi (Raspberry Pi OS Bookworm, 64-bit, Pi 4/5)
+## Build & run on the Pi (Raspberry Pi OS Bookworm, 64-bit; tested on a Pi 3 B+)
 
 ```bash
 sudo apt install -y build-essential pkg-config cmake libxkbcommon-dev libwayland-dev mesa-vulkan-drivers fonts-liberation2

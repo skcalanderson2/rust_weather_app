@@ -113,6 +113,30 @@ impl Phase {
     }
 }
 
+impl Phase {
+    /// Sun above the horizon (sunrise..sunset). Picks the day or night
+    /// variant of the weather icon, in step with the background.
+    pub fn daylight(self) -> bool {
+        match self {
+            Phase::Day => true,
+            Phase::Night => false,
+            Phase::Dawn(p) => p >= 0.5,
+            Phase::Dusk(p) => p < 0.5,
+        }
+    }
+
+    /// Backlight percentage: `day` in daytime, `night` at night, ramping
+    /// linearly across the hour of dawn or dusk.
+    pub fn brightness(self, day: f32, night: f32) -> f32 {
+        match self {
+            Phase::Day => day,
+            Phase::Night => night,
+            Phase::Dawn(p) => night + (day - night) * p,
+            Phase::Dusk(p) => day + (night - day) * p,
+        }
+    }
+}
+
 fn day(cover: Cover) -> Sky {
     match cover {
         Cover::Clear => DAY_CLEAR,
@@ -178,12 +202,11 @@ pub fn text_on(background: Color, light: Color) -> Color {
     }
 }
 
-/// Opacity of the dark halo behind the weather icon. The icons (a yellow
-/// sun, white clouds) vanish on bright skies, so the halo fades in as the
-/// sky behind them brightens: none on dark skies (night keeps its original
-/// look), up to 40 % on the brightest.
-pub fn halo_alpha(background: Color) -> f32 {
-    ((luminance(background) - 0.2) / 0.4).clamp(0.0, 1.0) * 0.4
+/// Whether weather icons drawn on `background` need their dark-outlined
+/// variant: the light icons (a yellow sun, white clouds) vanish on bright
+/// skies. Dark skies (night, orange twilight) keep the plain icons.
+pub fn outline_icons(background: Color) -> bool {
+    luminance(background) > 0.2
 }
 
 #[cfg(test)]
@@ -210,12 +233,24 @@ mod tests {
     }
 
     #[test]
-    fn halo_only_on_bright_skies() {
+    fn daylight_and_brightness_follow_phase() {
+        assert!(Phase::Day.daylight() && !Phase::Night.daylight());
+        assert!(!Phase::Dawn(0.4).daylight() && Phase::Dawn(0.5).daylight());
+        assert!(Phase::Dusk(0.4).daylight() && !Phase::Dusk(0.6).daylight());
+        assert_eq!(Phase::Night.brightness(100.0, 30.0), 30.0);
+        assert_eq!(Phase::Dawn(0.5).brightness(100.0, 30.0), 65.0);
+        assert_eq!(Phase::Dusk(1.0).brightness(100.0, 30.0), 30.0);
+    }
+
+    #[test]
+    fn outlines_only_on_bright_skies() {
         let icon_y = 77.5 / 480.0;
-        assert_eq!(halo_alpha(NIGHT.at(icon_y)), 0.0);
-        assert_eq!(halo_alpha(DAWN_DUSK_PARTLY.at(icon_y)), 0.0);
-        assert!(halo_alpha(DAY_CLEAR.at(icon_y)) > 0.3);
-        assert!(halo_alpha(DAY_CLOUDY.at(icon_y)) > 0.1);
+        assert!(!outline_icons(NIGHT.at(icon_y)));
+        assert!(!outline_icons(DAWN_DUSK_PARTLY.at(icon_y)));
+        assert!(outline_icons(DAY_CLEAR.at(icon_y)));
+        assert!(outline_icons(DAY_CLOUDY.at(icon_y)));
+        // Forecast box, lower on the screen.
+        assert!(outline_icons(DAY_PARTLY.at(414.0 / 480.0)));
     }
 
     #[test]

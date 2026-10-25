@@ -1,6 +1,6 @@
 # WeatherApp: Xojo → Rust/iced port plan
 
-## 1. What the Xojo app does (from `WeatherApp.xojo_xml_project`)
+## 1. What the Xojo app does (from `legacy/WeatherApp.xojo_xml_project`)
 
 **Window1**: 800×480, gradient backdrop (`Gradient for Weather App.png`), mouse cursor hidden, Esc quits.
 
@@ -36,7 +36,7 @@
 src/main.rs     iced application: State, Message, update, view, subscriptions
 src/weather.rs  serde models, async fetchers (reqwest + rustls), WMO → icon map, number formatting
 src/config.rs   Config (serde + TOML), defaults = Xojo constants, file lookup
-assets/         background.png (800×480 gradient), icons/*.png (Bas Milius weather-icons, MIT)
+assets/         icons/*.png (Bas Milius weather-icons, MIT)
 ```
 
 - **iced 0.14**, Elm architecture. `Message::{Tick, Refresh, ForecastLoaded, LocalTempLoaded, LocalHumLoaded, Retry(Source), Exit}`.

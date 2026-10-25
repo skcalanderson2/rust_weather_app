@@ -20,3 +20,8 @@ assets_dir = "assets"       # relative to the executable, then the working dir
 font = "Liberation Sans"    # Arial-compatible; installed on Raspberry Pi OS.
                             # Must be installed, or bold text may fall back to
                             # monospace. Use "Arial" on macOS, "" for system sans.
+
+dim_at_night = true         # lower the Pi display backlight at night
+day_brightness = 100        # percent
+night_brightness = 30       # percent; twilight ramps between the two
+alerts = true               # US National Weather Service alert banner
