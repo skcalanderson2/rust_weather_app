@@ -2,13 +2,17 @@
 //!
 //! Layout coordinates below are taken verbatim from the Xojo `Window1`
 //! controls (800x480 window) so the screen matches the original.
-//! Tapping the screen opens a details page (3-day forecast, next-24-hours
-//! chart, active alert); it closes on the next tap or after a minute.
+//! Tapping cycles through a forecast page (3-day forecast, next-24-hours
+//! chart, active alert) and a sensor page (last 24 hours of outdoor
+//! temperature, humidity and pressure), then back; any page returns to the
+//! main screen after a minute.
 
 mod alerts;
 mod backlight;
 mod chart;
 mod config;
+mod history;
+mod pressure;
 mod sky;
 mod weather;
 
@@ -41,7 +45,7 @@ const WHITE: Color = Color::from_rgb8(0xF7, 0xF7, 0xF7);
 const SKY_FADE_PER_SEC: f32 = 0.1;
 /// Values older than this are drawn dimmed so an outage is visible.
 const STALE_AFTER: Duration = Duration::from_secs(30 * 60);
-/// The details page closes by itself after this long.
+/// The forecast and sensor pages close by themselves after this long.
 const DETAILS_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn main() -> iced::Result {
@@ -66,7 +70,17 @@ enum Source {
     Forecast,
     LocalTemp,
     LocalHumidity,
+    LocalPressure,
+    /// Combined endpoint (`sensor_url`): all three readings at once.
+    Sensor,
     Alerts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Main,
+    Forecast,
+    Sensor,
 }
 
 #[derive(Debug, Clone)]
@@ -77,8 +91,10 @@ enum Message {
     ForecastLoaded(Result<Box<Forecast>, String>),
     LocalTempLoaded(Result<f64, String>),
     LocalHumidityLoaded(Result<f64, String>),
+    LocalPressureLoaded(Result<f64, String>),
+    SensorLoaded(Result<weather::SensorReading, String>),
     AlertsLoaded(Result<Vec<Alert>, String>),
-    /// Finger tap (or click) anywhere: toggle the details page.
+    /// Finger tap (or click) anywhere: next page.
     Tap,
     Exit,
 }
@@ -115,8 +131,15 @@ struct App {
     local_humidity_at: Option<Instant>,
     /// Most important first.
     alerts: Vec<Alert>,
-    /// When the details page was opened; `None` = main screen.
-    details: Option<Instant>,
+    /// BME280 station pressure, hPa.
+    local_pressure: Option<f64>,
+    local_pressure_at: Option<Instant>,
+    pressure_unit: pressure::Unit,
+    /// Outdoor readings every 5 minutes, persisted across restarts.
+    history: history::History,
+    page: Page,
+    /// When `page` was shown (for the timeout back to the main screen).
+    page_opened: Instant,
 }
 
 impl App {
@@ -139,6 +162,7 @@ impl App {
             backlight: if config.dim_at_night { Backlight::detect() } else { None },
             sky: sky::NIGHT,
             sky_override: std::env::var("WEATHER_APP_SKY").ok().and_then(|s| parse_sky(&s)),
+            pressure_unit: pressure::Unit::parse(&config.pressure_unit),
             assets,
             config,
             clock: clock_text(),
@@ -154,7 +178,16 @@ impl App {
             local_humidity: None,
             local_humidity_at: None,
             alerts: test_alert().into_iter().collect(),
-            details: std::env::var_os("WEATHER_APP_DETAILS").map(|_| Instant::now()),
+            local_pressure: None,
+            local_pressure_at: None,
+            history: history::History::load(),
+            // Testing aid: WEATHER_APP_PAGE=forecast|sensor opens that page.
+            page: match std::env::var("WEATHER_APP_PAGE").as_deref() {
+                Ok("sensor") => Page::Sensor,
+                Ok(_) => Page::Forecast,
+                Err(_) => Page::Main,
+            },
+            page_opened: Instant::now(),
         };
         app.sky = app.sky_target();
         (app, Task::done(Message::RefreshAll))
@@ -168,16 +201,26 @@ impl App {
                 let target = self.sky_target();
                 self.sky.approach(&target, SKY_FADE_PER_SEC);
                 self.refresh_icon();
-                if self.details.is_some_and(|t| t.elapsed() > DETAILS_TIMEOUT)
-                    && std::env::var_os("WEATHER_APP_DETAILS").is_none()
+                if self.page != Page::Main
+                    && self.page_opened.elapsed() > DETAILS_TIMEOUT
+                    && std::env::var_os("WEATHER_APP_PAGE").is_none()
                 {
-                    self.details = None;
+                    self.page = Page::Main;
                 }
+                self.record_history();
                 self.update_backlight();
                 Task::none()
             }
             Message::RefreshAll => {
-                let mut sources = vec![Source::Forecast, Source::LocalTemp, Source::LocalHumidity];
+                let mut sources = vec![Source::Forecast];
+                if !self.config.sensor_url.is_empty() {
+                    sources.push(Source::Sensor);
+                } else {
+                    sources.extend([Source::LocalTemp, Source::LocalHumidity]);
+                    if !self.config.local_pressure_url.is_empty() {
+                        sources.push(Source::LocalPressure);
+                    }
+                }
                 if self.config.alerts {
                     sources.push(Source::Alerts);
                 }
@@ -220,6 +263,36 @@ impl App {
                 eprintln!("weather_app: local humidity: {e}");
                 self.retry(Source::LocalHumidity)
             }
+            Message::LocalPressureLoaded(Ok(p)) => {
+                self.local_pressure = Some(p);
+                self.local_pressure_at = Some(Instant::now());
+                Task::none()
+            }
+            Message::LocalPressureLoaded(Err(e)) => {
+                eprintln!("weather_app: local pressure: {e}");
+                self.retry(Source::LocalPressure)
+            }
+            Message::SensorLoaded(Ok(r)) => {
+                let now = Some(Instant::now());
+                if let Some(t) = r.temp_f {
+                    self.local_temp = Some(t);
+                    self.local_temp_updated = Some(Local::now().time());
+                    self.local_temp_at = now;
+                }
+                if let Some(h) = r.humidity {
+                    self.local_humidity = Some(h);
+                    self.local_humidity_at = now;
+                }
+                if let Some(p) = r.pressure_hpa {
+                    self.local_pressure = Some(p);
+                    self.local_pressure_at = now;
+                }
+                Task::none()
+            }
+            Message::SensorLoaded(Err(e)) => {
+                eprintln!("weather_app: sensor: {e}");
+                self.retry(Source::Sensor)
+            }
             Message::AlertsLoaded(Ok(list)) => {
                 self.alerts = alerts::sorted(list);
                 self.alerts.extend(test_alert());
@@ -236,10 +309,12 @@ impl App {
                 }
             }
             Message::Tap => {
-                self.details = match self.details {
-                    Some(_) => None,
-                    None => Some(Instant::now()),
+                self.page = match self.page {
+                    Page::Main => Page::Forecast,
+                    Page::Forecast => Page::Sensor,
+                    Page::Sensor => Page::Main,
                 };
+                self.page_opened = Instant::now();
                 self.update_backlight();
                 Task::none()
             }
@@ -297,12 +372,12 @@ impl App {
     }
 
     /// Dim at night, brighten through dawn; full brightness while the
-    /// details page is open (someone is looking).
+    /// forecast or sensor page is open (someone is looking).
     fn update_backlight(&mut self) {
         let (day, night) = (self.config.day_brightness, self.config.night_brightness);
-        let level = match (self.details, self.phase()) {
-            (Some(_), _) | (None, None) => day,
-            (None, Some(phase)) => phase.brightness(day, night),
+        let level = match (self.page, self.phase()) {
+            (Page::Main, Some(phase)) => phase.brightness(day, night),
+            _ => day,
         };
         if let Some(bl) = &mut self.backlight {
             bl.set_percent(level);
@@ -323,6 +398,14 @@ impl App {
             Source::LocalHumidity => Task::perform(
                 weather::fetch_local_humidity(client, self.config.local_humidity_url.clone()),
                 Message::LocalHumidityLoaded,
+            ),
+            Source::Sensor => Task::perform(
+                weather::fetch_sensor(client, self.config.sensor_url.clone()),
+                Message::SensorLoaded,
+            ),
+            Source::LocalPressure => Task::perform(
+                weather::fetch_local_pressure(client, self.config.local_pressure_url.clone()),
+                Message::LocalPressureLoaded,
             ),
             Source::Alerts => Task::perform(
                 alerts::fetch_alerts(client, self.config.latitude, self.config.longitude),
@@ -355,9 +438,10 @@ impl App {
     // ---------- Views ----------
 
     fn view(&self) -> Element<'_, Message> {
-        let layout = match self.details {
-            Some(_) => self.view_details(),
-            None => self.view_main(),
+        let layout = match self.page {
+            Page::Forecast => self.view_details(),
+            Page::Sensor => self.view_sensor(),
+            Page::Main => self.view_main(),
         };
 
         let Sky { top, bottom } = self.sky;
@@ -373,7 +457,7 @@ impl App {
         });
 
         // Kiosk display: hide the pointer everywhere (Xojo InvisibleCursor);
-        // a tap anywhere toggles the details page.
+        // a tap anywhere moves to the next page.
         mouse_area(screen)
             .interaction(mouse::Interaction::Hidden)
             .on_press(Message::Tap)
@@ -385,6 +469,7 @@ impl App {
         let stale_fc = is_stale(self.forecast_at);
         let stale_temp = is_stale(self.local_temp_at);
         let stale_hum = is_stale(self.local_humidity_at);
+        let stale_pres = is_stale(self.local_pressure_at);
 
         let current_temp = match (&self.forecast_error, current) {
             (Some(e), _) => format!("Error getting data: {e}"),
@@ -442,9 +527,14 @@ impl App {
                 &format!("Local Temp: {}° F", self.local_temp.map_or("--".into(), fmt_1dp)),
                 50.0, regular, GREY, (176.0, 321.0, 604.0, 52.0), Horizontal::Left, stale_temp,
             ),
+            // Humidity and pressure, larger than Xojo's 12 px humidity label.
             self.label(
-                &format!("Local Humidity: {}%", self.local_humidity.map_or("--".into(), fmt_1dp)),
-                12.0, bold, WHITE, (176.0, 385.0, 187.0, 20.0), Horizontal::Left, stale_hum,
+                &format!("Humidity {}%", self.local_humidity.map_or("--".into(), fmt_1dp)),
+                22.0, regular, GREY, (176.0, 378.0, 200.0, 34.0), Horizontal::Left, stale_hum,
+            ),
+            self.label(
+                &format!("Pressure {}", self.pressure_text()),
+                22.0, regular, GREY, (380.0, 378.0, 400.0, 34.0), Horizontal::Left, stale_pres,
             ),
             self.label(
                 &format!(
@@ -505,7 +595,7 @@ impl App {
         let bold = Font { weight: Weight::Bold, ..self.font };
         let mut layout = stack![
             self.label("3-Day Forecast", 26.0, bold, WHITE, (20.0, 10.0, 400.0, 36.0), Horizontal::Left, false),
-            self.label("Tap to return", 14.0, regular, WHITE, (580.0, 10.0, 200.0, 36.0), Horizontal::Right, false),
+            self.label("Tap for sensor history", 14.0, regular, WHITE, (500.0, 10.0, 280.0, 36.0), Horizontal::Right, false),
         ]
         .width(WIDTH)
         .height(HEIGHT);
@@ -555,6 +645,101 @@ impl App {
                 .y(HEIGHT - chart::HEIGHT - 4.0),
         );
         layout.into()
+    }
+
+    /// Sensor page: last 24 hours of outdoor temperature, humidity and
+    /// pressure as three stacked charts sharing one time window.
+    fn view_sensor(&self) -> Element<'_, Message> {
+        let regular = self.font;
+        let bold = Font { weight: Weight::Bold, ..self.font };
+        let now = Local::now().naive_local();
+        let start = now - TimeDelta::hours(24);
+        let unit = self.pressure_unit;
+        let reference = if self.config.pressure_sea_level { "sea level" } else { "station" };
+        // (title, points, decimals, label suffix, minimum y-span)
+        type Panel = (String, Vec<(chrono::NaiveDateTime, f64)>, usize, &'static str, f64);
+        let charts: [Panel; 3] = [
+            ("Temperature · °F".into(), self.history.series(now, 24, |s| s.temp_f), 1, "°", 4.0),
+            ("Humidity · %".into(), self.history.series(now, 24, |s| s.humidity), 0, "%", 10.0),
+            (
+                format!("Pressure · {} ({reference})", unit.label()),
+                self.history.series(now, 24, |s| {
+                    Some(unit.value(self.reported_pressure(s.pressure_hpa?, s.temp_f)?))
+                }),
+                if unit == pressure::Unit::InHg { 2 } else { 1 },
+                "",
+                if unit == pressure::Unit::InHg { 0.1 } else { 3.0 },
+            ),
+        ];
+
+        let mut layout = stack![
+            self.label("Outdoor Sensor · Last 24 Hours", 26.0, bold, WHITE, (20.0, 10.0, 500.0, 36.0), Horizontal::Left, false),
+            self.label("Tap to return", 14.0, regular, WHITE, (580.0, 10.0, 200.0, 36.0), Horizontal::Right, false),
+        ]
+        .width(WIDTH)
+        .height(HEIGHT);
+        let (top, gap, height) = (52.0, 4.0, 138.0);
+        for (i, (title, points, decimals, suffix, min_span)) in charts.into_iter().enumerate() {
+            let y = top + (height + gap) * i as f32;
+            let last = i == 2;
+            let h = if last { height + 14.0 } else { height };
+            let chart = chart::SeriesChart {
+                points,
+                start,
+                end: now,
+                title,
+                decimals,
+                suffix: suffix.into(),
+                min_span,
+                show_axis: last,
+                ink: self.ink(WHITE, y, h),
+                font: regular,
+            };
+            layout = layout.push(pin(canvas(chart).width(760).height(h)).x(20).y(y));
+        }
+        layout.into()
+    }
+
+    /// Station pressure converted for display: sea level (default) using
+    /// the sensor's elevation and outdoor temperature, or as measured.
+    fn reported_pressure(&self, station_hpa: f64, temp_f: Option<f64>) -> Option<f64> {
+        let station_hpa = station_hpa + self.config.pressure_offset_hpa;
+        if !self.config.pressure_sea_level {
+            return Some(station_hpa);
+        }
+        let elevation = self.config.elevation_m.or(self.forecast.as_ref()?.elevation)?;
+        let temp_c = (temp_f? - 32.0) * 5.0 / 9.0;
+        Some(pressure::sea_level_hpa(station_hpa, elevation, temp_c))
+    }
+
+    /// "30.02 inHg ↑" (arrow once 3 hours of history exist).
+    fn pressure_text(&self) -> String {
+        let Some(now_hpa) = self.local_pressure.and_then(|p| self.reported_pressure(p, self.local_temp)) else {
+            return "--".into();
+        };
+        let mut s = self.pressure_unit.format(now_hpa);
+        // Trend on station pressure: elevation cancels out of the difference.
+        if let (Some(p), Some(then)) =
+            (self.local_pressure, self.history.pressure_3h_ago(Local::now().naive_local()))
+        {
+            s.push(' ');
+            s.push_str(pressure::Trend::from_change(p - then).arrow());
+        }
+        s
+    }
+
+    /// Save a history sample (every 5 minutes) from readings no older than
+    /// 10 minutes.
+    fn record_history(&mut self) {
+        let fresh = |v: Option<f64>, at: Option<Instant>| {
+            v.filter(|_| at.is_some_and(|t| t.elapsed() < Duration::from_secs(600)))
+        };
+        self.history.record(history::Sample {
+            t: Local::now().naive_local(),
+            temp_f: fresh(self.local_temp, self.local_temp_at),
+            humidity: fresh(self.local_humidity, self.local_humidity_at),
+            pressure_hpa: fresh(self.local_pressure, self.local_pressure_at),
+        });
     }
 
     /// Forecast for today + `days`, looked up by date so it stays right

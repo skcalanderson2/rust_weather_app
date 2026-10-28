@@ -9,6 +9,10 @@ use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Forecast {
+    /// Grid-cell elevation in metres (used for sea-level pressure unless
+    /// `elevation_m` is set in the config).
+    #[serde(default)]
+    pub elevation: Option<f64>,
     pub current: Current,
     pub daily: Daily,
     /// Absent when a custom `forecast_url` doesn't request hourly data.
@@ -140,6 +144,39 @@ struct HumidityReading {
     humidity: f64,
 }
 
+/// BME280 station pressure, hPa.
+#[derive(Debug, Deserialize)]
+struct PressureReading {
+    pressure: f64,
+}
+
+/// Combined BME280 endpoint, e.g. `GET /sensor` ->
+/// `{"temperature_c":17.36,"humidity_pct":47.36,"pressure_hpa":899.96}`.
+#[derive(Debug, Deserialize)]
+struct CombinedReading {
+    temperature_c: Option<f64>,
+    humidity_pct: Option<f64>,
+    pressure_hpa: Option<f64>,
+}
+
+/// One reading of the outdoor sensor (temperature already in °F).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensorReading {
+    pub temp_f: Option<f64>,
+    pub humidity: Option<f64>,
+    pub pressure_hpa: Option<f64>,
+}
+
+impl From<CombinedReading> for SensorReading {
+    fn from(r: CombinedReading) -> Self {
+        Self {
+            temp_f: r.temperature_c.map(|c| c * 9.0 / 5.0 + 32.0),
+            humidity: r.humidity_pct,
+            pressure_hpa: r.pressure_hpa,
+        }
+    }
+}
+
 // ---------- Fetching ----------
 
 pub fn client(timeout_secs: u64) -> reqwest::Client {
@@ -178,6 +215,16 @@ pub async fn fetch_local_humidity(client: reqwest::Client, url: String) -> Resul
     get_json::<HumidityReading>(&client, &url)
         .await
         .map(|r| r.humidity)
+}
+
+pub async fn fetch_sensor(client: reqwest::Client, url: String) -> Result<SensorReading, String> {
+    get_json::<CombinedReading>(&client, &url).await.map(SensorReading::from)
+}
+
+pub async fn fetch_local_pressure(client: reqwest::Client, url: String) -> Result<f64, String> {
+    get_json::<PressureReading>(&client, &url)
+        .await
+        .map(|r| r.pressure)
 }
 
 fn describe(e: reqwest::Error) -> String {
@@ -262,6 +309,16 @@ mod tests {
     fn parses_sensor_responses() {
         let t: TemperatureReading = serde_json::from_str(r#"{"temperature": 54.68}"#).unwrap();
         let h: HumidityReading = serde_json::from_str(r#"{"humidity": 41.2}"#).unwrap();
+        let p: PressureReading = serde_json::from_str(r#"{"pressure": 841.37}"#).unwrap();
+        assert_eq!(p.pressure, 841.37);
+        let c: CombinedReading = serde_json::from_str(
+            r#"{"temperature_c":17.36,"humidity_pct":47.36,"pressure_hpa":899.96}"#,
+        )
+        .unwrap();
+        let r = SensorReading::from(c);
+        assert!((r.temp_f.unwrap() - 63.248).abs() < 1e-9);
+        assert_eq!(r.humidity, Some(47.36));
+        assert_eq!(r.pressure_hpa, Some(899.96));
         assert_eq!(t.temperature, 54.68);
         assert_eq!(h.humidity, 41.2);
     }

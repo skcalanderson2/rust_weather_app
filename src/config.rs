@@ -17,9 +17,25 @@ pub struct Config {
     pub timezone: String,
     /// Full forecast URL. When set, overrides latitude/longitude/timezone.
     pub forecast_url: Option<String>,
-    /// Pico W sensor endpoints.
+    /// Combined sensor endpoint returning temperature (°C), humidity and
+    /// pressure in one JSON object. When set, the three URLs below are unused.
+    pub sensor_url: String,
+    /// Pico W sensor endpoints (one value each).
     pub local_temp_url: String,
     pub local_humidity_url: String,
+    /// BME280 station pressure in hPa (`{"pressure": 841.4}`). Empty = none.
+    pub local_pressure_url: String,
+    /// "inHg" (default) or "hPa".
+    pub pressure_unit: String,
+    /// Show sea-level pressure (default) rather than the raw station value.
+    pub pressure_sea_level: bool,
+    /// Sensor elevation in metres for the sea-level reduction. Defaults to
+    /// Open-Meteo's grid elevation; set it if the sensor sits much higher or
+    /// lower than the surrounding area.
+    pub elevation_m: Option<f64>,
+    /// Calibration added to every raw sensor reading (hPa), for a BME280
+    /// that reads consistently high or low against a nearby station.
+    pub pressure_offset_hpa: f64,
     /// How often all sources are refreshed (Xojo `WeatherTimer`: 900 000 ms).
     pub refresh_minutes: u64,
     /// After a failed request, retry that source this soon instead of
@@ -52,8 +68,14 @@ impl Default for Config {
             longitude: -104.9903,
             timezone: "America/Denver".into(),
             forecast_url: None,
+            sensor_url: String::new(),
             local_temp_url: "http://192.168.88.146:5000/temperature".into(),
             local_humidity_url: "http://192.168.88.146:5000/humidity".into(),
+            local_pressure_url: "http://192.168.88.146:5000/pressure".into(),
+            pressure_unit: "inHg".into(),
+            pressure_sea_level: true,
+            elevation_m: None,
+            pressure_offset_hpa: 0.0,
             refresh_minutes: 15,
             retry_seconds: 60,
             http_timeout_seconds: 10,

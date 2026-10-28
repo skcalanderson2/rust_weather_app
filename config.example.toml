@@ -7,9 +7,17 @@ longitude = -104.9903
 timezone = "America/Denver"
 # forecast_url = "https://api.open-meteo.com/v1/forecast?..."  # overrides the three keys above
 
-# Pico W sensor endpoints
+# Pico W sensor. Either one combined endpoint returning
+# {"temperature_c":..,"humidity_pct":..,"pressure_hpa":..}:
+# sensor_url = "http://192.168.88.102/sensor"
+# ...or one endpoint per value (used when sensor_url is unset):
 local_temp_url = "http://192.168.88.146:5000/temperature"
 local_humidity_url = "http://192.168.88.146:5000/humidity"
+local_pressure_url = "http://192.168.88.146:5000/pressure"   # BME280; "" if none
+pressure_unit = "inHg"      # or "hPa"
+pressure_sea_level = true   # false = raw station pressure
+# elevation_m = 1609        # sensor elevation for sea-level pressure; default: Open-Meteo's
+pressure_offset_hpa = 0     # calibration added to raw readings, e.g. 9.4 if the sensor reads low
 
 refresh_minutes = 15        # full refresh of all sources
 retry_seconds = 60          # retry a failed source this soon

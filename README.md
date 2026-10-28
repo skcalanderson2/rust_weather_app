@@ -5,8 +5,6 @@ Raspberry Pi weather display. Rust + [iced](https://iced.rs) 0.14 port of the Xo
 
 - Clock (`H:mm`, 1 s tick), current temp, wind chill, wind speed, condition icon: [Open-Meteo](https://open-meteo.com)
 - Tomorrow's max/min: Open-Meteo daily forecast
-- Local temp + humidity: Pico W sensor (`GET /temperature` → `{"temperature": 54.68}`, `GET /humidity` → `{"humidity": 41.2}`).
-  Rust/Embassy firmware for a Pico W + BME280 is in [pico_sensor/](pico_sensor/README.md).
 - Refresh every 15 min; a failed source retries after 60 s. Esc quits. Cursor hidden.
 - Background follows the sky: night, dawn, day, dusk (dawn/dusk = 30 min either side of
   Open-Meteo's sunrise/sunset) × clear (<25 % cloud), partly cloudy (25–75 %), cloudy (>75 %, or
@@ -19,13 +17,20 @@ Raspberry Pi weather display. Rust + [iced](https://iced.rs) 0.14 port of the Xo
 - Values older than 30 minutes (forecast or sensor) are drawn faded, so an outage is visible.
 - US National Weather Service alerts for your location appear as a banner (red = warning,
   orange = watch, amber = advisory). Disable with `alerts = false`.
-- Tap the screen for a details page: 3-day forecast (high/low, precipitation, gusts), the alert
-  headline, and a next-24-hours temperature and precipitation chart. Tap again (or wait a minute)
-  to return.
+- Outdoor BME280 sensor: temperature, humidity and pressure. Set `sensor_url` for a combined
+  endpoint returning `{"temperature_c":..,"humidity_pct":..,"pressure_hpa":..}`, or the
+  per-value `local_*_url`s. Pressure is shown at sea level in inHg (`pressure_unit`,
+  `pressure_sea_level`, `elevation_m`, `pressure_offset_hpa` for calibration) with a 3-hour trend
+  arrow (↑ rising, → steady, ↓ falling; ±1 hPa).
+- Sensor history: a sample every 5 minutes, kept 48 hours in
+  `~/.local/state/weather_app/history.json` (survives restarts and updates).
+- Tap the screen to cycle pages: forecast (3-day forecast with high/low, precipitation and gusts,
+  the alert headline, next-24-hours chart) → outdoor sensor (last 24 hours of temperature,
+  humidity and pressure) → back. Any page returns to the main screen after a minute.
 - Night dimming: the Pi touch display's backlight follows the sky (`day_brightness`,
   `night_brightness`, `dim_at_night` in `config.toml`); full brightness while the details page
   is open.
-- Previews: `WEATHER_APP_DETAILS=1` opens the details page, `WEATHER_APP_ALERT="Winter Storm
+- Previews: `WEATHER_APP_PAGE=forecast` or `sensor` opens that page, `WEATHER_APP_ALERT="Winter Storm
   Warning"` shows a test banner.
 
 ## Build & run on the Pi (Raspberry Pi OS Bookworm, 64-bit; tested on a Pi 3 B+)

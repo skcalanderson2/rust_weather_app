@@ -1,7 +1,0 @@
-[target.'cfg(all(target_arch = "arm", target_os = "none"))']
-# Hold BOOTSEL while plugging in the Pico W, then `cargo run --release`
-# converts the ELF to UF2 and copies it to the RPI-RP2 drive.
-runner = "elf2uf2-rs -d"
-
-[build]
-target = "thumbv6m-none-eabi"
