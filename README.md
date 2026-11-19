@@ -14,6 +14,12 @@ Raspberry Pi weather display. Rust + [iced](https://iced.rs) 0.14 port of the Xo
 - Weather icons switch day/night exactly at sunrise/sunset; light icons get a soft halo on bright
   skies. Sunrise and sunset times are shown under the wind speed.
 - Forecast box: tomorrow's high/low, weather icon and chance of precipitation.
+- Observed conditions beat the model, which misses valley fog and inversion cloud decks: fog
+  from the outdoor sensor (within `local_fog_spread_f` of the dew point in light wind), then the
+  latest report from the nearest NWS airport station (`observation_station`, e.g. `"KGPI"`; fog,
+  mist, rain, snow, cloud layers; ignored after 90 min), then Open-Meteo. A small label under
+  the weather icon names the source, e.g. "Overcast · KGPI". The sensor is read every
+  `sensor_refresh_seconds` (60).
 - Values older than 30 minutes (forecast or sensor) are drawn faded, so an outage is visible.
 - US National Weather Service alerts for your location appear as a banner (red = warning,
   orange = watch, amber = advisory). Disable with `alerts = false`.

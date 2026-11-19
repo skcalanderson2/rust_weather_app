@@ -54,6 +54,15 @@ pub struct Config {
     /// Backlight levels in percent. Twilight ramps between them.
     pub day_brightness: f32,
     pub night_brightness: f32,
+    /// NWS station whose observed conditions (fog, cloud layers, rain...)
+    /// override the forecast model, e.g. "KGPI". Empty = nearest airport
+    /// station; "none" = use the model only.
+    pub observation_station: String,
+    /// Show fog when the outdoor sensor is within this many °F of its dew
+    /// point in light wind. 0 disables.
+    pub local_fog_spread_f: f64,
+    /// How often the outdoor sensor is read (it's on the LAN, so often).
+    pub sensor_refresh_seconds: u64,
     /// Show US National Weather Service alerts (api.weather.gov) as a banner.
     pub alerts: bool,
     /// Font family for all text. The Xojo app used Arial; "Liberation Sans"
@@ -86,6 +95,9 @@ impl Default for Config {
             day_brightness: 100.0,
             night_brightness: 30.0,
             alerts: true,
+            observation_station: String::new(),
+            local_fog_spread_f: 2.0,
+            sensor_refresh_seconds: 60,
         }
     }
 }

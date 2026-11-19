@@ -33,3 +33,9 @@ dim_at_night = true         # lower the Pi display backlight at night
 day_brightness = 100        # percent
 night_brightness = 30       # percent; twilight ramps between the two
 alerts = true               # US National Weather Service alert banner
+
+# Observed conditions override the forecast model, which misses valley fog
+# and inversion cloud decks.
+observation_station = ""    # NWS station id, e.g. "KGPI"; "" = nearest airport; "none" = off
+local_fog_spread_f = 2.0    # fog when the sensor is within this of its dew point (0 = off)
+sensor_refresh_seconds = 60

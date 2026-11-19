@@ -12,6 +12,7 @@ mod backlight;
 mod chart;
 mod config;
 mod history;
+mod observations;
 mod pressure;
 mod sky;
 mod weather;
@@ -74,6 +75,17 @@ enum Source {
     /// Combined endpoint (`sensor_url`): all three readings at once.
     Sensor,
     Alerts,
+    /// Find the nearest NWS airport station (once).
+    Station,
+    Observation,
+}
+
+/// Weather shown right now, and where it came from.
+struct Conditions {
+    code: u8,
+    cloud_cover: f64,
+    /// Label for observed (non-model) conditions.
+    source: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +106,10 @@ enum Message {
     LocalPressureLoaded(Result<f64, String>),
     SensorLoaded(Result<weather::SensorReading, String>),
     AlertsLoaded(Result<Vec<Alert>, String>),
+    RefreshSensor,
+    RefreshObservation,
+    StationFound(Result<String, String>),
+    ObservationLoaded(Result<observations::Observation, String>),
     /// Finger tap (or click) anywhere: next page.
     Tap,
     Exit,
@@ -135,6 +151,10 @@ struct App {
     local_pressure: Option<f64>,
     local_pressure_at: Option<Instant>,
     pressure_unit: pressure::Unit,
+    /// NWS station for observed conditions (`None` until looked up, or
+    /// when disabled).
+    station: Option<String>,
+    observation: Option<observations::Observation>,
     /// Outdoor readings every 5 minutes, persisted across restarts.
     history: history::History,
     page: Page,
@@ -181,6 +201,8 @@ impl App {
             local_pressure: None,
             local_pressure_at: None,
             history: history::History::load(),
+            station: None,
+            observation: None,
             // Testing aid: WEATHER_APP_PAGE=forecast|sensor opens that page.
             page: match std::env::var("WEATHER_APP_PAGE").as_deref() {
                 Ok("sensor") => Page::Sensor,
@@ -213,18 +235,37 @@ impl App {
             }
             Message::RefreshAll => {
                 let mut sources = vec![Source::Forecast];
-                if !self.config.sensor_url.is_empty() {
-                    sources.push(Source::Sensor);
-                } else {
-                    sources.extend([Source::LocalTemp, Source::LocalHumidity]);
-                    if !self.config.local_pressure_url.is_empty() {
-                        sources.push(Source::LocalPressure);
-                    }
-                }
+                sources.extend(self.sensor_sources());
                 if self.config.alerts {
                     sources.push(Source::Alerts);
                 }
-                Task::batch(sources.into_iter().map(|s| self.fetch(s)))
+                Task::batch(sources.into_iter().map(|s| self.fetch(s)).chain([self.refresh_observation()]))
+            }
+            Message::RefreshSensor => Task::batch(self.sensor_sources().into_iter().map(|s| self.fetch(s))),
+            Message::RefreshObservation => self.refresh_observation(),
+            Message::StationFound(Ok(id)) => {
+                eprintln!("weather_app: observations from NWS station {id}");
+                self.station = Some(id);
+                self.fetch(Source::Observation)
+            }
+            Message::StationFound(Err(e)) => {
+                eprintln!("weather_app: observation station: {e}");
+                if e.contains("no airport") {
+                    self.config.observation_station = "none".into();
+                    Task::none()
+                } else {
+                    self.retry(Source::Station)
+                }
+            }
+            Message::ObservationLoaded(Ok(obs)) => {
+                self.observation = Some(obs);
+                self.refresh_icon();
+                Task::none()
+            }
+            Message::ObservationLoaded(Err(e)) => {
+                // Keep the last report; it ages out after observations::MAX_AGE.
+                eprintln!("weather_app: observation: {e}");
+                Task::none()
             }
             Message::Fetch(source) => self.fetch(source),
             Message::ForecastLoaded(Ok(forecast)) => {
@@ -340,18 +381,62 @@ impl App {
         if let Some((phase, cover)) = self.sky_override {
             return sky::target(phase, cover);
         }
-        let (Some(phase), Some(f)) = (self.phase(), &self.forecast) else { return sky::NIGHT };
-        let cover = Cover::from(f.current.cloud_cover, f.current.weather_code);
-        sky::target(phase, cover)
+        let (Some(phase), Some(c)) = (self.phase(), self.conditions()) else { return sky::NIGHT };
+        sky::target(phase, Cover::from(c.cloud_cover, c.code))
+    }
+
+    /// Current weather for the icon and background. Observed beats
+    /// modelled: fog detected by the outdoor sensor first, then a recent
+    /// NWS station report, then Open-Meteo (which misses valley fog and
+    /// inversion cloud decks).
+    fn conditions(&self) -> Option<Conditions> {
+        let f = self.forecast.as_ref()?;
+        let fresh = |at: Option<Instant>| at.is_some_and(|t| t.elapsed() < Duration::from_secs(900));
+        if let (Some(t), Some(h)) = (self.local_temp, self.local_humidity)
+            && fresh(self.local_temp_at)
+            && fresh(self.local_humidity_at)
+            && observations::local_fog(t, h, f.current.wind_speed_10m, self.config.local_fog_spread_f)
+        {
+            return Some(Conditions { code: 45, cloud_cover: 100.0, source: Some("Fog · local sensor".into()) });
+        }
+        if let Some(o) = self.observation.as_ref().filter(|o| o.is_recent(chrono::Utc::now())) {
+            return Some(Conditions {
+                code: o.code,
+                cloud_cover: o.cloud_cover,
+                source: Some(format!("{} · {}", o.summary, o.station)),
+            });
+        }
+        Some(Conditions { code: f.current.weather_code, cloud_cover: f.current.cloud_cover, source: None })
+    }
+
+    fn sensor_sources(&self) -> Vec<Source> {
+        if !self.config.sensor_url.is_empty() {
+            return vec![Source::Sensor];
+        }
+        let mut sources = vec![Source::LocalTemp, Source::LocalHumidity];
+        if !self.config.local_pressure_url.is_empty() {
+            sources.push(Source::LocalPressure);
+        }
+        sources
+    }
+
+    /// Fetch the latest station report (looking the station up first).
+    fn refresh_observation(&self) -> Task<Message> {
+        match self.config.observation_station.trim() {
+            "none" => Task::none(),
+            _ if self.station.is_some() => self.fetch(Source::Observation),
+            "" => self.fetch(Source::Station),
+            id => Task::done(Message::StationFound(Ok(id.to_ascii_uppercase()))),
+        }
     }
 
     /// Re-pick the current-conditions icon. Day/night comes from our own
     /// sunrise/sunset phase (minute-accurate, matches the background)
     /// rather than Open-Meteo's 15-minute `is_day` flag.
     fn refresh_icon(&mut self) {
-        let Some(f) = &self.forecast else { return };
+        let (Some(f), Some(c)) = (&self.forecast, self.conditions()) else { return };
         let daylight = self.phase().map_or(f.current.is_day == 1, Phase::daylight);
-        let name = weather::icon_name(f.current.weather_code, daylight);
+        let name = weather::icon_name(c.code, daylight);
         // Key includes the variant so the outline switches with the sky.
         let key = format!("{name}{}", if sky::outline_icons(self.sky.at(77.5 / HEIGHT)) { "+outline" } else { "" });
         if key != self.icon_name {
@@ -407,6 +492,14 @@ impl App {
                 weather::fetch_local_pressure(client, self.config.local_pressure_url.clone()),
                 Message::LocalPressureLoaded,
             ),
+            Source::Station => Task::perform(
+                observations::nearest_station(client, self.config.latitude, self.config.longitude),
+                Message::StationFound,
+            ),
+            Source::Observation => match &self.station {
+                Some(id) => Task::perform(observations::latest(client, id.clone()), Message::ObservationLoaded),
+                None => Task::none(),
+            },
             Source::Alerts => Task::perform(
                 alerts::fetch_alerts(client, self.config.latitude, self.config.longitude),
                 Message::AlertsLoaded,
@@ -425,6 +518,9 @@ impl App {
             // Xojo `TimeTimer` (1 s) and `WeatherTimer` (15 min).
             time::every(Duration::from_secs(1)).map(|_| Message::Tick),
             time::every(refresh).map(|_| Message::RefreshAll),
+            time::every(Duration::from_secs(self.config.sensor_refresh_seconds.max(10)))
+                .map(|_| Message::RefreshSensor),
+            time::every(Duration::from_secs(600)).map(|_| Message::RefreshObservation),
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
@@ -570,6 +666,12 @@ impl App {
                 .x(653)
                 .y(20),
             );
+        }
+
+        // Where the condition comes from when it isn't the model, e.g.
+        // "Overcast · KGPI" or "Fog · local sensor".
+        if let Some(source) = self.conditions().and_then(|c| c.source) {
+            layout = layout.push(self.label(&source, 13.0, regular, WHITE, (553.0, 122.0, 220.0, 16.0), Horizontal::Right, false));
         }
 
         // Wind icon beside the speed. Xojo `DayNight1` canvas, 55x56 at
